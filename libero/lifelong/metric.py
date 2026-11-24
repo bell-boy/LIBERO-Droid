@@ -73,12 +73,18 @@ def evaluate_one_task_success(
         eval_loop_num = (cfg.eval.n_eval + env_num - 1) // env_num
 
         # initiate evaluation envs
+        renderer = getattr(cfg.eval, "renderer", "filament")
+        if renderer == "filament":
+            from libero.libero.envs.filament import filament_python
+
+            filament_python()
         env_args = {
             "bddl_file_name": os.path.join(
                 cfg.bddl_folder, task.problem_folder, task.bddl_file
             ),
             "camera_heights": cfg.data.img_h,
             "camera_widths": cfg.data.img_w,
+            "renderer": renderer,
         }
 
         env_num = min(cfg.eval.num_procs, cfg.eval.n_eval) if cfg.eval.use_mp else 1

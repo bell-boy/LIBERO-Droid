@@ -156,6 +156,23 @@ All task suites default to robosuite's model of DROID's Robotiq 2F-85. When load
 
 `robot0_gripper_qpos` reports the six Robotiq joint positions. The built-in evaluator uses `robot0_panda_gripper_qpos`, a two-value estimate from the Robotiq's pad opening, for existing LIBERO policies. Pass `gripper_types="default"` to `OffScreenRenderEnv` to load the original Panda gripper for replay.
 
+The built-in evaluator uses Filament with cast shadows for policy RGB
+observations and rollout videos. Install MuJoCo 4 in a separate environment
+because robosuite 1.4 uses the MuJoCo 3 physics API. Run these commands from the
+repository root.
+
+```shell
+uv venv --python 3.12 outputs/.filament-venv
+uv pip install --python outputs/.filament-venv/bin/python "mujoco==4.0.1"
+export LIBERO_FILAMENT_PYTHON="$PWD/outputs/.filament-venv/bin/python"
+```
+
+Run evaluation from your regular LIBERO environment. For a custom evaluator,
+pass `renderer="filament"` to `OffScreenRenderEnv`. Select `--renderer mujoco`
+for the classic renderer in the standalone evaluator, or `eval.renderer=mujoco`
+for evaluation during training. Select the classic renderer when requesting
+depth or segmentation.
+
 By default the policies will be evaluated on the fly during training. If you have limited computing resource of GPUs, we offer an evaluation script for you to evaluate models separately.
 
 ```shell

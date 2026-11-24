@@ -133,6 +133,17 @@ class BDDLBaseDomain(SingleArmEnv):
         self._arena_xml = os.path.join(self.custom_asset_dir, scene_xml)
         self._arena_properties = scene_properties
 
+        self._filament_context = None
+        if renderer == "filament":
+            if has_renderer or not has_offscreen_renderer:
+                raise ValueError("Filament requires offscreen rendering.")
+            from libero.libero.envs.filament import FilamentRenderContext
+
+            self._filament_context = FilamentRenderContext()
+            # robosuite still manages observables and resets as for its native
+            # viewer. Its MjSim uses the Filament context installed below.
+            renderer = "mujoco"
+
         super().__init__(
             robots=robots,
             env_configuration=env_configuration,
@@ -159,6 +170,30 @@ class BDDLBaseDomain(SingleArmEnv):
             renderer=renderer,
             **kwargs,
         )
+
+    def _initialize_sim(self, xml_string=None):
+        super()._initialize_sim(xml_string=xml_string)
+        if self._filament_context is not None:
+            self._filament_context.attach(self.sim)
+
+    def _create_camera_sensors(
+        self, cam_name, cam_w, cam_h, cam_d, cam_segs, modality="image"
+    ):
+        if self._filament_context is not None and (cam_d or cam_segs):
+            raise ValueError(
+                "Filament evaluation supports RGB only. "
+                "Use renderer='mujoco' for depth or segmentation."
+            )
+        return super()._create_camera_sensors(
+            cam_name, cam_w, cam_h, cam_d, cam_segs, modality
+        )
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            if self._filament_context is not None:
+                self._filament_context.close()
 
     def seed(self, seed):
         np.random.seed(seed)

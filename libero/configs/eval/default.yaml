@@ -5,6 +5,7 @@ num_workers: 4
 n_eval: 20
 eval_every: 5
 max_steps: 600
+renderer: filament
 use_mp: true
 num_procs: 20
 save_sim_states: false

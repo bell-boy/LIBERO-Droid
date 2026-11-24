@@ -98,6 +98,12 @@ def parse_args():
     parser.add_argument("--load_task", type=int)
     parser.add_argument("--device_id", type=int)
     parser.add_argument("--save-videos", action="store_true")
+    parser.add_argument(
+        "--renderer",
+        choices=("filament", "mujoco"),
+        default="filament",
+        help="Renderer for RGB observations during the rollout.",
+    )
     # parser.add_argument('--save_dir',  type=str, required=True)
     args = parser.parse_args()
     args.device_id = "cuda:" + str(args.device_id)
@@ -116,6 +122,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.renderer == "filament":
+        from libero.libero.envs.filament import filament_python
+
+        filament_python()
     # e.g., experiments/LIBERO_SPATIAL/Multitask/BCRNNPolicy_seed100/
 
     experiment_dir = os.path.join(
@@ -238,6 +248,7 @@ def main():
             ),
             "camera_heights": cfg.data.img_h,
             "camera_widths": cfg.data.img_w,
+            "renderer": args.renderer,
         }
 
         env_num = 20
