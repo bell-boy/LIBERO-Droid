@@ -132,6 +132,25 @@ env.close()
 ```
 Currently, we only support sparse reward function (i.e., the agent receives `+1` when the task is finished). As sparse-reward RL is extremely hard to learn, currently we mainly focus on lifelong imitation learning.
 
+### Filament previews
+
+From the repository root, create a separate Python 3.12 environment for the
+MuJoCo 4 renderer. Run the preview command with your regular LIBERO environment
+active so robosuite can load the benchmark's initial state with a compatible
+version of MuJoCo. The renderer uses the `agentview` camera and enables shadows
+on the scene lights. The default preview shows task 0 of `libero_spatial`.
+
+```shell
+uv venv --python 3.12 outputs/.filament-venv
+uv pip install --python outputs/.filament-venv/bin/python "mujoco==4.0.1" pillow
+python -m benchmark_scripts.render_filament \
+    --filament-python outputs/.filament-venv/bin/python \
+    --output outputs/libero_spatial-task0-filament.png
+```
+
+Use `--help` to select another task, saved initial state, camera, or image size.
+Pass `--no-shadows` to render a comparison frame.
+
 ## Training
 To start a lifelong learning experiment, please choose:
 - `BENCHMARK` from `[LIBERO_SPATIAL, LIBERO_OBJECT, LIBERO_GOAL, LIBERO_90, LIBERO_10]`
