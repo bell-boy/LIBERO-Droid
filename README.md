@@ -152,6 +152,10 @@ Please see the documentation for the details of reproducing the study results.
 
 ## Evaluation
 
+All task suites default to robosuite's model of DROID's Robotiq 2F-85. When loading a bundled initial state, the simulator restores the saved arm and scene state and initializes the Robotiq in its reset pose. [DROID hardware docs](https://droid-dataset.github.io/droid/hardware-setup/shopping-list)
+
+`robot0_gripper_qpos` reports the six Robotiq joint positions. The built-in evaluator uses `robot0_panda_gripper_qpos`, a two-value estimate from the Robotiq's pad opening, for existing LIBERO policies. Pass `gripper_types="default"` to `OffScreenRenderEnv` to load the original Panda gripper for replay.
+
 By default the policies will be evaluated on the fly during training. If you have limited computing resource of GPUs, we offer an evaluation script for you to evaluate models separately.
 
 ```shell

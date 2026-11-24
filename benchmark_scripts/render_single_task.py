@@ -12,6 +12,7 @@ from libero.libero import benchmark, get_libero_path
 def render_task(task, bddl_file, init_states, demo_file):
     env_args = {
         "bddl_file_name": bddl_file,
+        "gripper_types": "default",
         "camera_heights": 128,
         "camera_widths": 128,
     }
@@ -51,6 +52,7 @@ def main():
     benchmark_instance = benchmark.get_benchmark_dict()[benchmark_name]()
     env_args = {
         "bddl_file_name": bddl_file,
+        "gripper_types": "default",
         "camera_heights": 128,
         "camera_widths": 128,
     }

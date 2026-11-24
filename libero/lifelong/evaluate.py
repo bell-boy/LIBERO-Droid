@@ -262,7 +262,7 @@ def main():
 
         num_success = 0
         for _ in range(5):  # simulate the physics without any actions
-            env.step(np.zeros((env_num, 7)))
+            obs, _, _, _ = env.step(np.zeros((env_num, 7)))
 
         with torch.no_grad():
             while steps < cfg.eval.max_steps:

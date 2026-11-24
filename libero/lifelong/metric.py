@@ -33,11 +33,17 @@ def raw_obs_to_tensor_obs(obs, task_emb, cfg):
             data["obs"][obs_name] = []
         all_obs_keys += modality_list
 
-    for k in range(env_num):
+    for env_obs in obs:
         for obs_name in all_obs_keys:
+            obs_key = cfg.data.obs_key_mapping[obs_name]
+            if (
+                obs_key == "robot0_gripper_qpos"
+                and "robot0_panda_gripper_qpos" in env_obs
+            ):
+                obs_key = "robot0_panda_gripper_qpos"
             data["obs"][obs_name].append(
                 ObsUtils.process_obs(
-                    torch.from_numpy(obs[k][cfg.data.obs_key_mapping[obs_name]]),
+                    torch.from_numpy(env_obs[obs_key]),
                     obs_key=obs_name,
                 ).float()
             )

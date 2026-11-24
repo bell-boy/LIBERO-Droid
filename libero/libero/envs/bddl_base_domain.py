@@ -4,6 +4,7 @@ import robosuite.utils.transform_utils as T
 
 from copy import deepcopy
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
+from robosuite.models.grippers.robotiq_85_gripper import Robotiq85Gripper
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import SequentialCompositeSampler
 from robosuite.utils.observables import Observable, sensor
@@ -434,6 +435,30 @@ class BDDLBaseDomain(SingleArmEnv):
         observables = super()._setup_observables()
 
         observables["robot0_joint_pos"]._active = True
+        robot = self.robots[0]
+        if isinstance(robot.gripper, Robotiq85Gripper):
+            pad_ids = [
+                self.sim.model.geom_name2id(robot.gripper.important_geoms[key][0])
+                for key in ("left_fingerpad", "right_fingerpad")
+            ]
+            pad_sizes = self.sim.model.geom_size[pad_ids]
+
+            @sensor(modality="robot0_proprio")
+            def panda_gripper_qpos(obs_cache):
+                # Project the pad boxes onto the gripper's closing axis.
+                axis = self.sim.data.site_xmat[robot.eef_site_id].reshape(3, 3)[:, 0]
+                left, right = self.sim.data.geom_xpos[pad_ids]
+                pad_rotations = self.sim.data.geom_xmat[pad_ids].reshape(2, 3, 3)
+                pad_radii = np.abs(axis @ pad_rotations) * pad_sizes
+                gap = abs((left - right) @ axis) - pad_radii.sum()
+                # Panda pads touch at a combined joint displacement of 1 mm.
+                opening = np.clip((gap + 0.001) / 2, 0.0, 0.04)
+                return np.array([opening, -opening])
+
+            name = "robot0_panda_gripper_qpos"
+            observables[name] = Observable(
+                name=name, sensor=panda_gripper_qpos, sampling_rate=self.control_freq
+            )
 
         # low-level object information
         if self.use_object_obs:

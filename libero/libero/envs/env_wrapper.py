@@ -3,6 +3,7 @@ import numpy as np
 import robosuite as suite
 import matplotlib.cm as cm
 
+from robosuite.models.grippers.robotiq_85_gripper import Robotiq85Gripper
 from robosuite.utils.errors import RandomizationError
 
 import libero.libero.envs.bddl_utils as BDDLUtils
@@ -134,7 +135,38 @@ class ControlEnv:
         self.env.seed(seed)
 
     def set_init_state(self, init_state):
+        robot = self.robots[0]
+        if isinstance(robot.gripper, Robotiq85Gripper):
+            init_state = self._restore_robotiq_init_state(init_state, robot)
         return self.regenerate_obs_from_state(init_state)
+
+    def _restore_robotiq_init_state(self, init_state, robot):
+        """Convert a benchmark state saved with the two-joint Panda gripper."""
+        init_state = np.asarray(init_state)
+        nq, nv = self.sim.model.nq, self.sim.model.nv
+        if init_state.shape == (1 + nq + nv,):
+            return init_state
+
+        gripper_qpos = robot._ref_gripper_joint_pos_indexes
+        gripper_qvel = robot._ref_gripper_joint_vel_indexes
+        panda_gripper_joints = 2
+        panda_nq = nq - len(gripper_qpos) + panda_gripper_joints
+        panda_nv = nv - len(gripper_qvel) + panda_gripper_joints
+        if init_state.shape != (1 + panda_nq + panda_nv,):
+            raise ValueError(f"Unexpected LIBERO initial state shape: {init_state.shape}")
+
+        qpos_start = 1 + gripper_qpos[0]
+        qvel_start = 1 + panda_nq + gripper_qvel[0]
+        robot.gripper.current_action = np.zeros(robot.gripper.dof)
+        return np.concatenate(
+            (
+                init_state[:qpos_start],
+                robot.gripper.init_qpos,
+                init_state[qpos_start + panda_gripper_joints : qvel_start],
+                np.zeros(len(gripper_qvel)),
+                init_state[qvel_start + panda_gripper_joints :],
+            )
+        )
 
     def regenerate_obs_from_state(self, mujoco_state):
         self.set_state(mujoco_state)
@@ -151,13 +183,14 @@ class ControlEnv:
 
 class OffScreenRenderEnv(ControlEnv):
     """
-    For visualization and evaluation.
+    For visualization and evaluation with DROID's Robotiq 2F-85.
     """
 
     def __init__(self, **kwargs):
         # This shouldn't be customized
         kwargs["has_renderer"] = False
         kwargs["has_offscreen_renderer"] = True
+        kwargs.setdefault("gripper_types", "Robotiq85Gripper")
         super().__init__(**kwargs)
 
 
@@ -181,6 +214,7 @@ class SegmentationRenderEnv(OffScreenRenderEnv):
         self.segmentation_id_mapping = {}
         self.instance_to_id = {}
         self.segmentation_robot_id = None
+        self.robot_instance_labels = []
         super().__init__(**kwargs)
 
     def step(self, action):
@@ -190,12 +224,16 @@ class SegmentationRenderEnv(OffScreenRenderEnv):
         obs = self.env.reset()
         self.segmentation_id_mapping = {}
 
-        for i, instance_name in enumerate(list(self.env.model.instances_to_ids.keys())):
-            if instance_name == "Panda0":
+        robot_model = self.robots[0].robot_model
+        robot_instances = {robot_model.name}
+        robot_instances.update(model.name for model in robot_model.models)
+        self.robot_instance_labels = []
+        for i, instance_name in enumerate(self.env.model.instances_to_ids):
+            if instance_name == robot_model.name:
                 self.segmentation_robot_id = i
-
-        for i, instance_name in enumerate(list(self.env.model.instances_to_ids.keys())):
-            if instance_name not in ["Panda0", "RethinkMount0", "PandaGripper0"]:
+            if instance_name in robot_instances:
+                self.robot_instance_labels.append(i + 1)
+            else:
                 self.segmentation_id_mapping[i] = instance_name
 
         self.instance_to_id = {
@@ -206,11 +244,10 @@ class SegmentationRenderEnv(OffScreenRenderEnv):
     def get_segmentation_instances(self, segmentation_image):
         # get all instances' segmentation separately
         seg_img_dict = {}
-        segmentation_image[segmentation_image > self.segmentation_robot_id] = (
-            self.segmentation_robot_id + 1
-        )
-        seg_img_dict["robot"] = segmentation_image * (
-            segmentation_image == self.segmentation_robot_id + 1
+        seg_img_dict["robot"] = np.where(
+            np.isin(segmentation_image, self.robot_instance_labels),
+            self.segmentation_robot_id + 1,
+            0,
         )
 
         for seg_id, instance_name in self.segmentation_id_mapping.items():
