@@ -186,6 +186,27 @@ python libero/lifelong/evaluate.py --benchmark BENCHMARK_NAME \
                                    --device_id CUDA_ID
 ```
 
+### π0.5 DROID evaluation on Modal
+
+The Modal runner evaluates `pi05_droid_jointpos` on the first three initial
+states of LIBERO Spatial task 0. It uses the Robotiq 2F-85, the three-quarter
+exterior camera, the wrist camera, and Filament with the original scene
+lighting. The simulator executes each 15-action chunk before querying again.
+
+Use an authenticated Modal profile. The runner expects the companion
+`pi05-libero` evaluator checkout next to this repository. Set
+`PI05_LIBERO_ROOT` to use a checkout at a different path.
+
+```shell
+run_dir=outputs/pi05-spatial-triplet
+uvx --from modal modal run benchmark_scripts/modal_pi05.py \
+  --output "$run_dir/result.tar.gz"
+tar -xzf "$run_dir/result.tar.gz" -C "$run_dir"
+```
+
+The archive contains the run manifest, reports, and three MP4s under
+`pi05-result/evaluation/`.
+
 # Citation
 If you find **LIBERO** to be useful in your own research, please consider citing our paper:
 
