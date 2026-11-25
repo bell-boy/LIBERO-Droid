@@ -188,24 +188,61 @@ python libero/lifelong/evaluate.py --benchmark BENCHMARK_NAME \
 
 ### π0.5 DROID evaluation on Modal
 
-The Modal runner evaluates `pi05_droid_jointpos` on the first three initial
-states of LIBERO Spatial task 0. It uses the Robotiq 2F-85, the three-quarter
-exterior camera, the wrist camera, and Filament with the original scene
-lighting. The simulator executes each 15-action chunk before querying again.
+`benchmark_scripts/modal_pi05.py` evaluates `pi05_droid_jointpos` on one LIBERO
+Spatial task per run. Its defaults reproduce the setup that first picked the
+requested bowl in Filament:
+
+- Filament rendering with shadows and the original scene lighting.
+- The three-quarter exterior camera (57° vertical field of view). The image is
+  flipped vertically only, so camera-right appears on the right of the frame.
+- The calibrated left lens of DROID ZED Mini 19824535 as the wrist camera.
+- The MolmoSpaces DROID Robotiq 2F-85, driven by its tendon actuator. The policy
+  receives the measured finger gap normalized by the nominal 85 mm opening.
+- The DROID arm reset pose and DROID-style hybrid joint impedance control,
+  with the policy queried every 66 ms of simulated time for up to 530 steps (35 s).
+- Binary gripper commands. The hand closes fully when the predicted closure
+  exceeds 0.5 and opens otherwise.
+- Full action chunks. The simulator executes all 15 predicted actions before
+  the next query.
+- One trial, using the first initial state.
 
 Use an authenticated Modal profile. The runner expects the companion
 `pi05-libero` evaluator checkout next to this repository. Set
-`PI05_LIBERO_ROOT` to use a checkout at a different path.
+`PI05_LIBERO_ROOT` to use a checkout at a different path. Install the
+gripper asset in the companion checkout once, then choose a task with
+`--task-id` (0–9).
 
 ```shell
-run_dir=outputs/pi05-spatial-triplet
-uvx --from modal modal run benchmark_scripts/modal_pi05.py \
-  --output "$run_dir/result.tar.gz"
-tar -xzf "$run_dir/result.tar.gz" -C "$run_dir"
+bash "${PI05_LIBERO_ROOT:-../pi05-libero}/scripts/setup_molmobot_gripper.sh"
+uvx --from modal modal run benchmark_scripts/modal_pi05.py --task-id 0
 ```
 
-The archive contains the run manifest, reports, and three MP4s under
-`pi05-result/evaluation/`.
+The result is saved to `outputs/pi05-droid/spatial-task<ID>/result.tar.gz`
+unless `--output` names another path. It contains the run manifest, reports,
+and one MP4, trajectory, and `pick.json` per episode under
+`pi05-result/evaluation/`. Use `--trials N` for the first N initial states and
+`--sampling-seed` for repeatable policy sampling.
+
+A pickup requires both finger pads to contact the target bowl while its
+center is more than 2 cm above its starting height, clear of all other bodies
+except the gripper, for 10 consecutive frames. `pick.json` records the first
+qualifying frame and longest hold. The standard LIBERO report scores the full
+placement.
+
+On task 0, initial state 0, this setup lifted the requested bowl 15.6 cm and
+held it for 15.2 s with sampling seed 11. It narrowly missed placement, with
+a closest approach of 3.38 cm to the plate center against LIBERO's 3 cm
+threshold. Seed 7 also picked the requested bowl, holding it for 88 frames.
+With the original LIBERO exterior camera instead, Filament picked the
+distractor bowl on seed 11.
+
+Each option can be turned off for comparison. `--renderer mujoco` uses
+classic MuJoCo rendering. `--no-binary-gripper` sends continuous closure
+commands and `--no-full-chunks` replans every step with a temporal ensemble.
+`--no-droid-pick` returns to the earlier setup. That setup uses the robosuite
+Robotiq 85 (or the MolmoSpaces hand with `--molmospaces-gripper`), the LIBERO
+arm pose and controller, and the three-quarter camera without the calibrated
+wrist.
 
 # Citation
 If you find **LIBERO** to be useful in your own research, please consider citing our paper:

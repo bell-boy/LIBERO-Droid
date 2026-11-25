@@ -12,7 +12,8 @@ import numpy as np
 
 
 # The physics environment owns these poses, including fixtures moved on reset.
-_MODEL_FIELDS = ("body_pos", "body_quat", "cam_pos", "cam_quat", "cam_fovy", "site_rgba")
+_MODEL_FIELDS = ("body_pos", "body_quat", "cam_pos", "cam_quat", "cam_fovy",
+                 "cam_resolution", "cam_sensorsize", "cam_intrinsic", "site_rgba")
 _DATA_FIELDS = ("qpos", "mocap_pos", "mocap_quat")
 _RGB_ONLY = (
     "Filament evaluation supports RGB only. "
@@ -139,6 +140,7 @@ class _FilamentScene:
         self.options.sitegroup[:] = False
         self.renderables.set_options(self.options)
         self.visible_sites = np.zeros(self.model.nsite, dtype=bool)
+        self.Camera = mjrf.Camera
         self.View = renderer.View
         self.targets = {}
 
@@ -181,10 +183,20 @@ class _FilamentScene:
         if name not in self.targets:
             self.targets[name] = np.empty((height, width, 3), dtype=np.uint8)
             self.engine.target(name, self.targets[name])
+        gl_camera = mujoco.mjv_camera2GLCamera(self.model, self.data, camera)
+        # Retain the horizontal frustum and account for Filament's opposite
+        # vertical lens-shift convention for off-center principal points.
+        projection = self.Camera(
+            pos=gl_camera.pos, forward=gl_camera.forward, up=gl_camera.up,
+            frustum_center=gl_camera.frustum_center, frustum_width=gl_camera.frustum_width,
+            frustum_bottom=-gl_camera.frustum_top, frustum_top=-gl_camera.frustum_bottom,
+            frustum_near=gl_camera.frustum_near, frustum_far=gl_camera.frustum_far,
+            orthographic=gl_camera.orthographic,
+        )
         view = self.View(
             scene="eval",
             target=name,
-            camera=mujoco.mjv_camera2GLCamera(self.model, self.data, camera),
+            camera=projection,
             shadows=True,
         )
         self.engine.render([view])

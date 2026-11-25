@@ -1,4 +1,4 @@
-"""Run the three-episode π0.5 DROID evaluation on Modal."""
+"""Run the π0.5 DROID evaluation on Modal."""
 import io
 import os
 from pathlib import Path
@@ -10,7 +10,7 @@ import time
 
 import modal
 
-app = modal.App("libero-droid-pi05-spatial-task0-3qv")
+app = modal.App("libero-droid-pi05")
 ROOT = Path(__file__).resolve().parents[1]
 OPENPI_REV = "215abfb217dbac7d5f1273282331b9b1866c0479"
 LEROBOT_REV = "0cf864870cf29f4738d3ade893e6fd13fbd7cdb5"
@@ -52,23 +52,32 @@ if modal.is_local():
     companion = Path(os.environ.get("PI05_LIBERO_ROOT", ROOT.parent / "pi05-libero")).resolve()
     evaluator = companion / "src/pi05_libero/evaluate.py"
     server_script = companion / "scripts/serve_jointpos.py"
+    gripper_assets = companion / ".libero/robotiq_2f85_v4"
     if not evaluator.is_file() or not server_script.is_file():
         raise SystemExit(f"Set PI05_LIBERO_ROOT to a pi05-libero checkout. Checked {companion}")
     image = (
         image.add_local_dir(ROOT / "libero", "/opt/LIBERO-Droid/libero", ignore=["**/__pycache__/**", "**/.DS_Store"])
         .add_local_dir(companion / "src/pi05_libero", "/opt/eval/src/pi05_libero", ignore=["**/__pycache__/**"])
+        .add_local_file(ROOT / "benchmark_scripts/pi05_pick_metrics.py",
+                        "/opt/LIBERO-Droid/benchmark_scripts/pi05_pick_metrics.py")
         .add_local_file(server_script, "/opt/eval/scripts/serve_jointpos.py")
         .add_local_file(ROOT / "benchmark_scripts/modal_pi05_eval.py", "/opt/eval/run.py")
     )
+    if (gripper_assets / "2f85.xml").is_file():
+        image = image.add_local_dir(gripper_assets, "/opt/robotiq_2f85_v4")
 
 
 @app.function(image=image, gpu="A100", cpu=8, memory=32768, timeout=2400)
-def evaluate(libero_revision: str):
+def evaluate(libero_revision: str, molmospaces_gripper: bool = False, trials: int = 3,
+             sampling_seed=None, droid_pick: bool = False,
+             binary_gripper: bool = False, full_chunks: bool = False, renderer: str = "", task_id: int = 0):
     with tempfile.TemporaryDirectory(prefix="libero-droid-") as workdir:
-        return run_evaluation(Path(workdir), libero_revision)
+        return run_evaluation(Path(workdir), libero_revision, molmospaces_gripper, trials, sampling_seed, droid_pick,
+                              binary_gripper, full_chunks, renderer, task_id)
 
 
-def run_evaluation(workdir: Path, libero_revision: str):
+def run_evaluation(workdir: Path, libero_revision: str, molmospaces_gripper=False, trials=3,
+                   sampling_seed=None, droid_pick=False, binary_gripper=False, full_chunks=False, renderer="", task_id=0):
     out = workdir / "pi05-result"
     out.mkdir()
     runtime = workdir / "xdg"
@@ -112,6 +121,14 @@ def run_evaluation(workdir: Path, libero_revision: str):
                 "--openpi-revision", OPENPI_REV,
                 "--port", str(port),
                 "--output", str(out / "evaluation"),
+                "--trials", str(trials),
+                "--task-id", str(task_id),
+                *(["--renderer", renderer] if renderer else []),
+                *(["--sampling-seed", str(sampling_seed)] if sampling_seed is not None else []),
+                *(["--binary-gripper"] if binary_gripper else []),
+                *(["--full-chunks"] if full_chunks else []),
+                *(["--droid-pick"] if droid_pick else []),
+                *(["--robotiq-asset", "/opt/robotiq_2f85_v4/2f85.xml"] if molmospaces_gripper or droid_pick else []),
             ],
             env=env, cwd="/opt/eval",
         )
@@ -131,13 +148,29 @@ def run_evaluation(workdir: Path, libero_revision: str):
 
 
 @app.local_entrypoint()
-def main(output: str = "outputs/modal-pi05-spatial-task0-3qv/result.tar.gz"):
-    destination = Path(output).resolve()
+def main(output: str = "", molmospaces_gripper: bool = False, trials: int = 1, sampling_seed: int | None = None,
+         droid_pick: bool = True, binary_gripper: bool = True, full_chunks: bool = True, renderer: str = "",
+         task_id: int = 0):
+    if renderer not in ("", "mujoco", "filament"):
+        raise SystemExit("--renderer must be mujoco or filament")
+    if not droid_pick:
+        # Both options belong to the pickup preset.
+        binary_gripper = full_chunks = False
+    if not 0 <= task_id < 10:
+        raise SystemExit("--task-id must be a LIBERO Spatial task from 0 to 9")
+    if trials < 1:
+        raise SystemExit("--trials must be positive")
+    if sampling_seed is not None and sampling_seed < 0:
+        raise SystemExit("--sampling-seed must be nonnegative")
+    if (molmospaces_gripper or droid_pick) and not (gripper_assets / "2f85.xml").is_file():
+        raise SystemExit(f"Install the gripper with bash {companion / 'scripts/setup_molmobot_gripper.sh'}")
+    destination = Path(output or f"outputs/pi05-droid/spatial-task{task_id}/result.tar.gz").resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise SystemExit(f"Choose a new output path. {destination} already exists.")
     revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
-    archive = evaluate.remote(revision)
+    archive = evaluate.remote(revision, molmospaces_gripper, trials, sampling_seed, droid_pick,
+                              binary_gripper, full_chunks, renderer, task_id)
     with destination.open("xb") as output_file:
         output_file.write(archive)
     print(f"Saved {destination}")
