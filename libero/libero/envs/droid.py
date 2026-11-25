@@ -175,10 +175,11 @@ class DroidEnv:
 
     def reset(self, init_state):
         """Start from a LIBERO initial state with the Robotiq open and the arm at the DROID reset pose."""
-        env, robot = self.env, self.robot
+        env = self.env
         env.seed(self.seed)
         env.reset()
-        # Hard resets replace the controller, so patch it every episode.
+        # Hard resets rebuild the robot and its controller, so look them up and patch them every episode.
+        robot = self.robot
         controller = robot.controller
         if controller.name != "JOINT_POSITION" or controller.control_dim != 7:
             raise ValueError("Expected the seven-joint JOINT_POSITION controller")
