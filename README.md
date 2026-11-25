@@ -186,42 +186,61 @@ python libero/lifelong/evaluate.py --benchmark BENCHMARK_NAME \
                                    --device_id CUDA_ID
 ```
 
-### π0.5 DROID evaluation on Modal
+### DROID setup
 
-`benchmark_scripts/modal_pi05.py` evaluates `pi05_droid_jointpos` on one LIBERO
-Spatial task per run. Its defaults reproduce the setup that first picked the
-requested bowl in Filament:
+`libero.libero.envs.droid.DroidEnv` runs any LIBERO task in the DROID robot
+setup, so a DROID-trained policy can use it without adapters:
 
 - Filament rendering with shadows and the original scene lighting.
-- The three-quarter exterior camera (57° vertical field of view). The image is
-  flipped vertically only, so camera-right appears on the right of the frame.
+- The MolmoSpaces DROID Robotiq 2F-85, driven by its tendon actuator.
+- The DROID reset arm pose. The scene comes from LIBERO's saved initial state.
+- DROID's hybrid joint impedance controller with a 66 ms control period. Each
+  step moves the arm at most 0.2 rad per joint toward the target.
+- A DROID exterior camera placed relative to the robot base. Its pose is the
+  median of the calibrated left-side DROID cameras whose view holds the robot
+  shoulder, the reset gripper and the table. It uses the median DROID ZED 2
+  calibration, 320 × 180 with a 101° × 69° field of view.
 - The calibrated left lens of DROID ZED Mini 19824535 as the wrist camera.
-- The MolmoSpaces DROID Robotiq 2F-85, driven by its tendon actuator. The policy
-  receives the measured finger gap normalized by the nominal 85 mm opening.
-- The DROID arm reset pose and DROID-style hybrid joint impedance control,
-  with the policy queried every 66 ms of simulated time for up to 530 steps (35 s).
-- Binary gripper commands. The hand closes fully when the predicted closure
-  exceeds 0.5 and opens otherwise.
-- Full action chunks. The simulator executes all 15 predicted actions before
-  the next query.
-- One trial, using the first initial state.
 
-Use an authenticated Modal profile. The runner expects the companion
-`pi05-libero` evaluator checkout next to this repository. Set
-`PI05_LIBERO_ROOT` to use a checkout at a different path. Install the
-gripper asset in the companion checkout once, then choose a task with
-`--task-id` (0–9).
+Observations hold upright `exterior_image` and `wrist_image` arrays, the seven
+measured `joint_position` values, and the measured `gripper_position`
+(0 open, 1 closed). Actions are seven absolute joint targets in radians and a
+gripper closure in [0, 1].
+
+```python
+from libero.libero.envs.droid import DroidEnv
+
+env = DroidEnv(bddl_file)
+obs = env.reset(init_state)
+obs, success = env.step(action)
+```
+
+Install the gripper asset into `.libero/` once.
 
 ```shell
-bash "${PI05_LIBERO_ROOT:-../pi05-libero}/scripts/setup_molmobot_gripper.sh"
+bash benchmark_scripts/setup_molmobot_gripper.sh
+```
+
+### π0.5 DROID evaluation on Modal
+
+`benchmark_scripts/modal_pi05.py` evaluates `pi05_droid_jointpos` in the DROID
+setup on one LIBERO Spatial task per run. The policy server is
+`benchmark_scripts/pi05_serve_jointpos.py`, and the evaluation loop is
+`benchmark_scripts/pi05_droid_eval.py`. The loop resizes both images to
+224 × 224 with padding, executes all 15 predicted actions before the next
+query, and closes the hand when the predicted closure exceeds 0.5. Episodes
+last up to 530 steps (35 s). Use an authenticated Modal profile.
+
+```shell
 uvx --from modal modal run benchmark_scripts/modal_pi05.py --task-id 0
 ```
 
 The result is saved to `outputs/pi05-droid/spatial-task<ID>/result.tar.gz`
-unless `--output` names another path. It contains the run manifest, reports,
-and one MP4, trajectory, and `pick.json` per episode under
+unless `--output` names another path. It contains the run manifest, a summary,
+and one MP4, trajectory, `episode.json`, and `pick.json` per episode under
 `pi05-result/evaluation/`. Use `--trials N` for the first N initial states and
-`--sampling-seed` for repeatable policy sampling.
+`--sampling-seed` for repeatable policy sampling. `--replan-steps`,
+`--no-binary-gripper`, and `--renderer mujoco` change the loop and renderer.
 
 A pickup requires both finger pads to contact the target bowl while its
 center is more than 2 cm above its starting height, clear of all other bodies
@@ -229,20 +248,9 @@ except the gripper, for 10 consecutive frames. `pick.json` records the first
 qualifying frame and longest hold. The standard LIBERO report scores the full
 placement.
 
-On task 0, initial state 0, this setup lifted the requested bowl 15.6 cm and
-held it for 15.2 s with sampling seed 11. It narrowly missed placement, with
-a closest approach of 3.38 cm to the plate center against LIBERO's 3 cm
-threshold. Seed 7 also picked the requested bowl, holding it for 88 frames.
-With the original LIBERO exterior camera instead, Filament picked the
-distractor bowl on seed 11.
-
-Each option can be turned off for comparison. `--renderer mujoco` uses
-classic MuJoCo rendering. `--no-binary-gripper` sends continuous closure
-commands and `--no-full-chunks` replans every step with a temporal ensemble.
-`--no-droid-pick` returns to the earlier setup. That setup uses the robosuite
-Robotiq 85 (or the MolmoSpaces hand with `--molmospaces-gripper`), the LIBERO
-arm pose and controller, and the three-quarter camera without the calibrated
-wrist.
+With one initial state per task, Spatial tasks 0 to 4 picked up the target
+bowl in 4 of 5 episodes and completed 2. An earlier three-quarter exterior
+camera (57° field of view, 256 × 256) picked up 3 and completed 1.
 
 # Citation
 If you find **LIBERO** to be useful in your own research, please consider citing our paper:

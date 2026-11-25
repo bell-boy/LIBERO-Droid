@@ -49,35 +49,22 @@ image = (
 )
 
 if modal.is_local():
-    companion = Path(os.environ.get("PI05_LIBERO_ROOT", ROOT.parent / "pi05-libero")).resolve()
-    evaluator = companion / "src/pi05_libero/evaluate.py"
-    server_script = companion / "scripts/serve_jointpos.py"
-    gripper_assets = companion / ".libero/robotiq_2f85_v4"
-    if not evaluator.is_file() or not server_script.is_file():
-        raise SystemExit(f"Set PI05_LIBERO_ROOT to a pi05-libero checkout. Checked {companion}")
-    image = (
-        image.add_local_dir(ROOT / "libero", "/opt/LIBERO-Droid/libero", ignore=["**/__pycache__/**", "**/.DS_Store"])
-        .add_local_dir(companion / "src/pi05_libero", "/opt/eval/src/pi05_libero", ignore=["**/__pycache__/**"])
-        .add_local_file(ROOT / "benchmark_scripts/pi05_pick_metrics.py",
-                        "/opt/LIBERO-Droid/benchmark_scripts/pi05_pick_metrics.py")
-        .add_local_file(server_script, "/opt/eval/scripts/serve_jointpos.py")
-        .add_local_file(ROOT / "benchmark_scripts/modal_pi05_eval.py", "/opt/eval/run.py")
-    )
+    gripper_assets = ROOT / ".libero/robotiq_2f85_v4"
+    image = image.add_local_dir(ROOT / "libero", "/opt/LIBERO-Droid/libero",
+                                ignore=["**/__pycache__/**", "**/.DS_Store"])
+    for script in ("pi05_droid_eval.py", "pi05_pick_metrics.py", "pi05_serve_jointpos.py"):
+        image = image.add_local_file(ROOT / "benchmark_scripts" / script, f"/opt/LIBERO-Droid/benchmark_scripts/{script}")
     if (gripper_assets / "2f85.xml").is_file():
-        image = image.add_local_dir(gripper_assets, "/opt/robotiq_2f85_v4")
+        image = image.add_local_dir(gripper_assets, "/opt/LIBERO-Droid/.libero/robotiq_2f85_v4")
 
 
 @app.function(image=image, gpu="A100", cpu=8, memory=32768, timeout=2400)
-def evaluate(libero_revision: str, molmospaces_gripper: bool = False, trials: int = 3,
-             sampling_seed=None, droid_pick: bool = False,
-             binary_gripper: bool = False, full_chunks: bool = False, renderer: str = "", task_id: int = 0):
+def evaluate(libero_revision: str, eval_args: list[str]):
     with tempfile.TemporaryDirectory(prefix="libero-droid-") as workdir:
-        return run_evaluation(Path(workdir), libero_revision, molmospaces_gripper, trials, sampling_seed, droid_pick,
-                              binary_gripper, full_chunks, renderer, task_id)
+        return run_evaluation(Path(workdir), libero_revision, eval_args)
 
 
-def run_evaluation(workdir: Path, libero_revision: str, molmospaces_gripper=False, trials=3,
-                   sampling_seed=None, droid_pick=False, binary_gripper=False, full_chunks=False, renderer="", task_id=0):
+def run_evaluation(workdir: Path, libero_revision: str, eval_args: list[str]):
     out = workdir / "pi05-result"
     out.mkdir()
     runtime = workdir / "xdg"
@@ -85,7 +72,7 @@ def run_evaluation(workdir: Path, libero_revision: str, molmospaces_gripper=Fals
     env = dict(
         os.environ,
         PYTHONUNBUFFERED="1",
-        PYTHONPATH="/opt/eval/src:/opt/LIBERO-Droid",
+        PYTHONPATH="/opt/LIBERO-Droid",
         LIBERO_FILAMENT_PYTHON="/opt/filament/bin/python",
         LIBERO_CONFIG_PATH=str(workdir / ".libero"),
         MUJOCO_GL="osmesa",
@@ -98,8 +85,9 @@ def run_evaluation(workdir: Path, libero_revision: str, molmospaces_gripper=Fals
         XDG_RUNTIME_DIR=str(runtime),
     )
     port = 8000
+    scripts = Path("/opt/LIBERO-Droid/benchmark_scripts")
     server = subprocess.Popen(
-        ["/opt/openpi/.venv/bin/python", "/opt/eval/scripts/serve_jointpos.py", "--port", str(port)],
+        ["/opt/openpi/.venv/bin/python", str(scripts / "pi05_serve_jointpos.py"), "--port", str(port)],
         env=env, cwd="/opt/openpi",
     )
     try:
@@ -114,23 +102,10 @@ def run_evaluation(workdir: Path, libero_revision: str, molmospaces_gripper=Fals
         else:
             raise TimeoutError("Policy server did not start within 20 minutes")
         result = subprocess.run(
-            [
-                "/opt/sim/bin/python", "/opt/eval/run.py",
-                "--libero-root", "/opt/LIBERO-Droid",
-                "--libero-revision", libero_revision,
-                "--openpi-revision", OPENPI_REV,
-                "--port", str(port),
-                "--output", str(out / "evaluation"),
-                "--trials", str(trials),
-                "--task-id", str(task_id),
-                *(["--renderer", renderer] if renderer else []),
-                *(["--sampling-seed", str(sampling_seed)] if sampling_seed is not None else []),
-                *(["--binary-gripper"] if binary_gripper else []),
-                *(["--full-chunks"] if full_chunks else []),
-                *(["--droid-pick"] if droid_pick else []),
-                *(["--robotiq-asset", "/opt/robotiq_2f85_v4/2f85.xml"] if molmospaces_gripper or droid_pick else []),
-            ],
-            env=env, cwd="/opt/eval",
+            ["/opt/sim/bin/python", str(scripts / "pi05_droid_eval.py"),
+             "--libero-root", "/opt/LIBERO-Droid", "--libero-revision", libero_revision,
+             "--openpi-revision", OPENPI_REV, "--port", str(port), "--output", str(out / "evaluation"), *eval_args],
+            env=env, cwd=str(workdir),
         )
         (out / "exit_code").write_text(str(result.returncode))
     finally:
@@ -148,29 +123,27 @@ def run_evaluation(workdir: Path, libero_revision: str, molmospaces_gripper=Fals
 
 
 @app.local_entrypoint()
-def main(output: str = "", molmospaces_gripper: bool = False, trials: int = 1, sampling_seed: int | None = None,
-         droid_pick: bool = True, binary_gripper: bool = True, full_chunks: bool = True, renderer: str = "",
-         task_id: int = 0):
-    if renderer not in ("", "mujoco", "filament"):
+def main(output: str = "", task_id: int = 0, trials: int = 1, sampling_seed: int | None = None,
+         replan_steps: int = 15, binary_gripper: bool = True, renderer: str = "filament"):
+    if renderer not in ("mujoco", "filament"):
         raise SystemExit("--renderer must be mujoco or filament")
-    if not droid_pick:
-        # Both options belong to the pickup preset.
-        binary_gripper = full_chunks = False
     if not 0 <= task_id < 10:
         raise SystemExit("--task-id must be a LIBERO Spatial task from 0 to 9")
-    if trials < 1:
-        raise SystemExit("--trials must be positive")
+    if trials < 1 or replan_steps < 1:
+        raise SystemExit("--trials and --replan-steps must be positive")
     if sampling_seed is not None and sampling_seed < 0:
         raise SystemExit("--sampling-seed must be nonnegative")
-    if (molmospaces_gripper or droid_pick) and not (gripper_assets / "2f85.xml").is_file():
-        raise SystemExit(f"Install the gripper with bash {companion / 'scripts/setup_molmobot_gripper.sh'}")
+    if not (gripper_assets / "2f85.xml").is_file():
+        raise SystemExit(f"Install the gripper with bash {ROOT / 'benchmark_scripts/setup_molmobot_gripper.sh'}")
     destination = Path(output or f"outputs/pi05-droid/spatial-task{task_id}/result.tar.gz").resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         raise SystemExit(f"Choose a new output path. {destination} already exists.")
     revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
-    archive = evaluate.remote(revision, molmospaces_gripper, trials, sampling_seed, droid_pick,
-                              binary_gripper, full_chunks, renderer, task_id)
+    eval_args = ["--task-id", str(task_id), "--trials", str(trials), "--replan-steps", str(replan_steps),
+                 "--renderer", renderer, "--binary-gripper" if binary_gripper else "--no-binary-gripper",
+                 *(["--sampling-seed", str(sampling_seed)] if sampling_seed is not None else [])]
+    archive = evaluate.remote(revision, eval_args)
     with destination.open("xb") as output_file:
         output_file.write(archive)
     print(f"Saved {destination}")
