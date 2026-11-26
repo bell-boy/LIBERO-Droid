@@ -22,7 +22,7 @@ import mujoco
 import numpy as np
 
 from . import robotiq
-from .env_wrapper import OffScreenRenderEnv
+from .env_wrapper import ControlEnv, OffScreenRenderEnv
 
 DEFAULT_ROBOTIQ_ASSET = Path(__file__).resolve().parents[3] / ".libero/robotiq_2f85_v4/2f85.xml"
 EXTERIOR_CAMERA = "agentview"
@@ -151,19 +151,35 @@ def _install_hybrid_feedback(env):
     controller.run_controller = types.MethodType(hybrid_torque, controller)
 
 
+def droid_control_action(action, measured, joint_limits):
+    """Convert policy targets to the arm and gripper inputs used by robosuite."""
+    action = np.asarray(action, dtype=np.float64)
+    if action.shape[-1:] != (8,) or not np.isfinite(action).all():
+        raise ValueError(f"Expected 7 joint targets and a gripper closure, got {action}")
+    displacement = action[..., :7] - measured
+    scale = np.maximum(1.0, np.max(np.abs(displacement), axis=-1, keepdims=True) / MAX_JOINT_DELTA)
+    target = np.clip(measured + displacement / scale, joint_limits[:, 0], joint_limits[:, 1])
+    grip = 2 * np.clip(action[..., 7:], 0, 1) - 1
+    return np.concatenate((target, grip), axis=-1)
+
+
 class DroidEnv:
     """A LIBERO task with the DROID robot, cameras and controller."""
 
-    def __init__(self, bddl_file_name, renderer="filament", robotiq_asset=DEFAULT_ROBOTIQ_ASSET, seed=7):
+    def __init__(self, bddl_file_name, renderer="filament", robotiq_asset=DEFAULT_ROBOTIQ_ASSET, seed=7,
+                 *, camera_obs=True):
         self.gripper_type = robotiq.register_gripper(robotiq_asset)
         height, width = IMAGE_SIZE
-        self.env = OffScreenRenderEnv(
-            bddl_file_name=str(bddl_file_name), renderer=renderer, gripper_types=self.gripper_type,
+        env_class = OffScreenRenderEnv if camera_obs else ControlEnv
+        self.env = env_class(
+            bddl_file_name=str(bddl_file_name), renderer=renderer if camera_obs else "mujoco",
+            gripper_types=self.gripper_type, use_camera_obs=camera_obs, has_offscreen_renderer=camera_obs,
             controller="JOINT_POSITION", control_freq=CONTROL_FREQ, ignore_done=True,
             camera_names=[EXTERIOR_CAMERA, WRIST_CAMERA], camera_heights=height, camera_widths=width,
         )
         self.renderer = renderer
         self.seed = seed
+        self.camera_obs = camera_obs
 
     @property
     def sim(self):
@@ -201,29 +217,31 @@ class DroidEnv:
         # Switch to DROID control after the arm settles under the same target.
         _install_hybrid_feedback(env)
         env.env.control_timestep = CONTROL_PERIOD
-        return self._observation(obs)
+        return self._observation(obs) if self.camera_obs else self.proprioception()
 
     def step(self, action):
         """Apply absolute joint targets and a gripper closure. Returns the observation and LIBERO success."""
         action = np.asarray(action, dtype=np.float64)
-        if action.shape != (8,) or not np.isfinite(action).all():
+        if action.shape != (8,):
             raise ValueError(f"Expected 7 joint targets and a gripper closure, got {action}")
         measured = self.sim.data.qpos[self.robot._ref_joint_pos_indexes]
-        # Scale the whole arm displacement so no joint moves more than MAX_JOINT_DELTA per step.
-        displacement = action[:7] - measured
-        scale = max(1.0, np.max(np.abs(displacement)) / MAX_JOINT_DELTA)
-        target = np.clip(measured + displacement / scale, self.joint_limits[:, 0], self.joint_limits[:, 1])
-        grip = 2 * np.clip(action[7], 0, 1) - 1
-        obs, *_ = self.env.step(np.r_[target, grip])
-        return self._observation(obs), self.env.check_success()
+        control = droid_control_action(action, measured, self.joint_limits)
+        obs, *_ = self.env.step(control)
+        observation = self._observation(obs) if self.camera_obs else self.proprioception()
+        return observation, self.env.check_success()
 
     def _observation(self, obs):
-        robot = self.robot
-        width = robotiq.finger_gap(robot)
         return {
             # MuJoCo renders bottom-up. Both cameras look world-up, so a vertical flip restores them.
             "exterior_image": np.ascontiguousarray(obs[f"{EXTERIOR_CAMERA}_image"][::-1]),
             "wrist_image": np.ascontiguousarray(obs[f"{WRIST_CAMERA}_image"][::-1]),
+            **self.proprioception(),
+        }
+
+    def proprioception(self):
+        robot = self.robot
+        width = robotiq.finger_gap(robot)
+        return {
             "joint_position": self.sim.data.qpos[robot._ref_joint_pos_indexes].copy(),
             "gripper_position": np.array([1.0 - np.clip(width / OPEN_WIDTH, 0.0, 1.0)]),
         }

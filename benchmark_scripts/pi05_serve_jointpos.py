@@ -19,7 +19,10 @@ def main():
     from openpi.training import config
     from openpi.serving import websocket_policy_server
     from openpi import transforms
+    from openpi.models.model import Observation
     from openpi.policies import droid_policy
+    import jax
+    import jax.numpy as jnp
     import orbax.checkpoint as ocp
 
     checkpoint = "gs://openpi-assets/checkpoints/pi05_droid_jointpos"
@@ -48,23 +51,49 @@ def main():
     horizon = cfg.model.action_horizon
     dim = cfg.model.action_dim
 
+    def seeded_noise(seed):
+        return np.random.default_rng(int(seed)).standard_normal((horizon, dim), dtype=np.float32)
+
     class ExperimentPolicy:
         def __init__(self):
             self.inference_id = 0
 
         def infer(self, observation):
+            if "observations" in observation:
+                return self.infer_batch(observation["observations"])
             if "sampling_seed" not in observation:
                 reply = policy.infer(observation)
             else:
                 request = dict(observation)
                 seed = int(request.pop("sampling_seed"))
-                noise = np.random.default_rng(seed).standard_normal((horizon, dim), dtype=np.float32)
+                noise = seeded_noise(seed)
                 reply = policy.infer(request, noise=noise)
             self.inference_id += 1
             return {**reply, "inference_id": self.inference_id}
 
+        def infer_batch(self, observations):
+            # Use the pinned OpenPI Policy's preprocessing and denoiser with a
+            # leading batch axis, then apply the original output transform per row.
+            if not observations or any("sampling_seed" not in obs for obs in observations):
+                raise ValueError("Batched joint-position inference requires a seed for each observation")
+            inputs = []
+            for obs in observations:
+                request = dict(obs)
+                del request["sampling_seed"]
+                inputs.append(policy._input_transform(request))
+            batch = jax.tree.map(lambda *leaf: jnp.asarray(np.stack(leaf)), *inputs)
+            noise = jnp.asarray(np.stack([seeded_noise(obs["sampling_seed"]) for obs in observations]))
+            actions = np.asarray(policy._sample_actions(
+                jax.random.key(0), Observation.from_dict(batch), noise=noise, **policy._sample_kwargs,
+            ))
+            outputs = [policy._output_transform({"state": data["state"], "actions": action.copy()})["actions"]
+                       for data, action in zip(inputs, actions, strict=True)]
+            self.inference_id += len(outputs)
+            return {"actions": np.stack(outputs), "inference_id": self.inference_id}
+
     websocket_policy_server.WebsocketPolicyServer(ExperimentPolicy(), host="0.0.0.0", port=args.port,
                                                   metadata={**policy.metadata, "sampling_seed": True,
+                                                            "batched_inference": True,
                                                             "prediction_horizon": horizon,
                                                             "fresh_chunk_inference": True}).serve_forever()
 

@@ -224,7 +224,7 @@ bash benchmark_scripts/setup_molmobot_gripper.sh
 ### π0.5 DROID evaluation on Modal
 
 `benchmark_scripts/modal_pi05.py` evaluates `pi05_droid_jointpos` in the DROID
-setup on one LIBERO Spatial task per run. The policy server is
+setup on LIBERO Spatial tasks. The policy server is
 `benchmark_scripts/pi05_serve_jointpos.py`, and the evaluation loop is
 `benchmark_scripts/pi05_droid_eval.py`. The loop resizes both images to
 224 × 224 with padding, executes all 15 predicted actions before the next
@@ -241,6 +241,67 @@ and one MP4, trajectory, `episode.json`, and `pick.json` per episode under
 `pi05-result/evaluation/`. Use `--trials N` for the first N initial states and
 `--sampling-seed` for repeatable policy sampling. `--replan-steps`,
 `--no-binary-gripper`, and `--renderer mujoco` change the loop and renderer.
+
+With classic MuJoCo, `--num-envs` sets the number of worker processes. Each
+worker owns its simulation, renderer, and WebSocket connection. As workers
+finish, they pick up the next trial. All workers share the OpenPI server,
+which handles one inference request at a time.
+
+```shell
+uvx --from modal modal run benchmark_scripts/modal_pi05.py \
+  --task-id 0 --backend mujoco --trials 16 --num-envs 4 \
+  --output outputs/pi05-droid/spatial-task0-processes/result.tar.gz
+```
+
+With a policy server already listening, the standalone
+`benchmark_scripts/pi05_droid_eval.py` accepts the same flags. Pass an output
+directory as `--output`. Use `--sampling-seed` to keep policy sampling tied to
+the trial and step when concurrent requests arrive in a different order.
+
+To run trials of the same task in parallel on NVIDIA GPUs, select the MuJoCo
+Warp backend and set the number of concurrent environments. This runs 16
+initial states in groups of 8 and writes the same per-episode artifacts.
+
+```shell
+uvx --from modal modal run benchmark_scripts/modal_pi05.py \
+  --task-id 0 --backend warp --trials 16 --num-envs 8 \
+  --output outputs/pi05-droid/spatial-task0-warp/result.tar.gz
+```
+
+Warp batches physics and both RGB cameras. By default the OpenPI server
+processes one observation at a time. Each trial keeps its own action chunk, sampling
+seed, and termination condition. Warp RGB and solver behavior can differ
+from Filament and classic MuJoCo. The manifest records the backend and batch
+size. [MuJoCo Warp documentation](https://mujoco.readthedocs.io/en/3.17.0/mjwarp/index.html)
+
+To run different Warp tasks concurrently, pass a comma-separated list to
+`--task-ids` and set `--task-workers`. Each worker process owns one task model
+at a time and batches up to `--num-envs` trials of that task on the GPU.
+`--trials` applies to each task. For example, this runs two tasks concurrently,
+each with four episodes in its Warp batch.
+
+```shell
+uvx --from modal modal run benchmark_scripts/modal_pi05.py \
+  --backend warp --task-ids 0,1 --task-workers 2 --trials 4 --num-envs 4 \
+  --output outputs/pi05-droid/spatial-tasks0-1-warp/result.tar.gz
+```
+
+Workers share the Modal GPU and the OpenPI server, so GPU memory use grows
+with both worker count and batch size. The archive contains per-task episode
+directories, per-task metrics, and an overall success rate.
+
+For a throughput comparison, choose the Modal GPU with `--gpu` and pass
+`--sweep` as comma-separated `workers x worlds x policy batch size` triples.
+The sweep loads one policy server and saves timings and GPU utilization
+alongside each configuration's results. Set `--sampling-seed` for policy
+batches larger than one. `--max-steps` can shorten the trials for a smoke
+test. Omit it for the full episode limit.
+
+For local Warp evaluation, use a separate copy of the DROID evaluation
+environment with `mujoco==3.17.0`, `mujoco-warp==3.17.0`, and
+`warp-lang==1.19.0`. With the OpenPI server listening, run
+`benchmark_scripts/pi05_droid_eval.py` with the same task, backend, trial, and
+environment flags. Pass an output directory that does not exist yet.
 
 A pickup requires both finger pads to contact the target bowl while its
 center is more than 2 cm above its starting height, clear of all other bodies
