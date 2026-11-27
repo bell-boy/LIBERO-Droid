@@ -12,6 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--restore-concurrent-gb", type=int, default=4, help="Limit checkpoint read staging to fit hosts with little system RAM")
+    parser.add_argument("--local-socket", help="Serve packed OpenPI requests over a private local socket")
     args = parser.parse_args()
     if args.restore_concurrent_gb <= 0:
         parser.error("--restore-concurrent-gb must be positive")
@@ -91,6 +92,15 @@ def main():
             self.inference_id += len(outputs)
             return {"actions": np.stack(outputs), "inference_id": self.inference_id}
 
+    if args.local_socket:
+        from multiprocessing.connection import Listener
+        from openpi_client import msgpack_numpy
+        model = ExperimentPolicy()
+        with Listener(args.local_socket, family="AF_UNIX") as listener:
+            while True:
+                with listener.accept() as conn:
+                    request = msgpack_numpy.unpackb(conn.recv_bytes())
+                    conn.send_bytes(msgpack_numpy.packb(model.infer(request)))
     websocket_policy_server.WebsocketPolicyServer(ExperimentPolicy(), host="0.0.0.0", port=args.port,
                                                   metadata={**policy.metadata, "sampling_seed": True,
                                                             "batched_inference": True,
